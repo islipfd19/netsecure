@@ -1,1 +1,245 @@
 #!/bin/bash
+
+. /etc/netsecure.conf
+
+export name=$(basename "$0")
+export suffix="-01-eth0"
+
+if [[ $EUID -ne 0 ]]; then
+    echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Warning $name was attempted to be run by non-root user $USER!" &>> $log
+    echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] This script must be run as root" 1>&2
+    exit 1
+fi
+
+fw_add(){
+    for u in $host; do
+        input=`ssh -tq $user@$u sudo iptables -S | grep INPUT | grep -io $OFFENDMAC`
+        if [[ $input == "" ]]; then
+            ssh -tq $user@$u sudo iptables -I INPUT 1 -m mac --mac-source $OFFENDMAC -j DROP
+            ssh -tq $user@$u sudo iptables -I INPUT 1 -m mac --mac-source $OFFENDMAC -j LOG
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has been added to the INPUT DROP chain on $u" &>> $log
+        else
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has already been added to the INPUT DROP chain on $u" &>> $log
+        fi
+        forward=`ssh -tq $user@$u sudo iptables -S | grep FORWARD | grep -io $OFFENDMAC`
+
+        if [[ $forward == "" ]]; then
+            ssh -tq $user@$u sudo iptables -I FORWARD 1 -m mac --mac-source $OFFENDMAC -j DROP
+            ssh -tq $user@$u sudo iptables -I FORWARD 1 -m mac --mac-source $OFFENDMAC -j LOG
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has been added to the FORWARD DROP chain on $u" &>> $log
+        else
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has already been added to the FORWARD DROP chain on $u" &>> $log
+        fi
+    done
+}
+
+hostapd_drop(){
+        for h in $hostapd; do
+            ssh -tq $user@$h sudo "echo $OFFENDMAC >> /etc/hostapd/hostapd.deny"
+            if [[ $? != 0 ]]; then
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Unable to add MAC $OFFENDMAC to $h deny list" &>> $log
+            else
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has been been added to $h deny list" &>> $log
+            fi
+        done
+        sleep 2
+        for h in $hostapd; do
+            ssh -tq $user@$h sudo hostapd_cli deauthenticate $OFFENDMAC
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $OFFENDMAC has been been deauthenticated from $h if it were connected wirelessly" &>> $log
+        done
+}
+
+shorewall(){
+    for t in $shorewallhost; do
+        ssh -tq $user@$t sudo shorewall logdrop $OFFENDIP
+        echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] IP $OFFENDIP is now being blocked on shorewall on $t" &>> $log
+    done
+}
+
+question_mac(){
+    if [[ $host != "" ]]; then
+        read -p "Please provide the MAC address you wish to remove (in format aa:bb:cc:dd:ee:ff): " mac
+            if [ `echo $mac | egrep -i "^([0-9A-F]{2}:){5}[0-9A-F]{2}$"` ]; then
+                mac=$mac && fw_del
+            else
+                echo "Not a valid MAC address!"
+                question_mac
+            fi
+    else
+        echo "No hosts found in the config file. Please add a host first!"
+        exit 0
+    fi
+}
+
+question_ip(){
+    if [[ $shorewallhost != "" ]]; then
+        read -p "Please provide the IP address you wish to remove: " ip
+        if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            OIFS=$IFS
+            IFS='.'
+            ip=($ip)
+            IFS=$OIFS
+            if [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]; then
+                ip=${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]} && fw_del
+            else
+                echo "Please provide a valid IP Address!"
+                question_ip
+            fi
+        fi
+    else
+        echo "No shorewall hosts were found in the config file. Please add a shorewall host first!"
+        exit 0
+    fi
+}
+
+question(){
+    while true; do
+        read -p "Are you sure you want to remove the offending MAC/IP address? Yes/No " yn
+        case $yn in
+            [Yy]* )
+                while true; do
+                    read -p "Do you want to remove the MAC or IP from the firewalls? Mac/IP " mi
+                    case $mi in
+                        [Mm][Aa][Cc] )
+                            question_mac
+                        ;;
+                        [Ii][Pp] )
+                            question_ip
+                        ;;
+                        * )
+                            echo "Please answer either <MAC> or <IP>!"
+                        ;;
+                    esac
+                done
+            ;;
+            [Nn]* )
+                exit 0
+            ;;
+            * )
+                echo "Please answer yes or no."
+            ;;
+         esac
+     done
+}
+
+fw_del(){
+    if [[ $mac != "" ]]; then
+        for u in $host; do
+            input=`ssh -tq $user@$u sudo iptables -S |grep INPUT | grep $mac | grep -io '[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}'`
+
+            if [[ $input == "" ]]; then
+                echo "MAC $mac is not on the INPUT DROP chain from $u"
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $mac was attempted to be removed from iptables on $u but it was not being blocked!" >> $log
+            else
+                ssh -tq $user@$u sudo iptables -D INPUT -m mac --mac-source $mac -j LOG
+                ssh -tq $user@$u sudo iptables -D INPUT -m mac --mac-source $mac -j DROP
+                echo "MAC $mac has been removed from the INPUT DROP chain from $u"
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $mac has been removed from the INPUT DROP chain on $u" &>> $log
+            fi
+            forward=`ssh -tq $user@$u sudo iptables -S |grep FORWARD | grep $mac | grep -io '[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}'`
+
+            if [[ $forward == "" ]]; then
+                echo "MAC $mac is not on the FORWARD DROP chain from $u"
+            else
+                ssh -tq $user@$u sudo iptables -D FORWARD -m mac --mac-source $mac -j LOG
+                ssh -tq $user@$u sudo iptables -D FORWARD -m mac --mac-source $mac -j DROP
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $mac has been removed from the FORWARD DROP chain on $u" &>> $log
+                echo "MAC $mac has been removed from the FORWARD DROP chain from $u"
+            fi
+        done
+        for h in $hostapd; do
+            ssh -tq $user@$h sudo sed -i /$mac/d /etc/hostapd/hostapd.deny
+            if [[ $? == 0 ]]; then
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] MAC $mac has been removed from the WAP deny list on $h" &>> $log
+            else
+                echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Unable to remove MAC $mac from deny list on $h" &>> $log
+            fi
+        done
+    fi
+    if [[ $ip != "" ]]; then
+        for t in $shorewallhost; do
+            ssh -tq $user@$t sudo shorewall allow $ip
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] IP $ip has been removed from shorewall on $t" &>> $log
+        done
+    fi
+    unset mac
+    unset ip
+    question
+}
+
+mailnmap(){
+        nmap --max-parallelism 200 --max-scan-delay 0.85s -A -O -Pn --system-dns --traceroute $OFFENDIP > /tmp/nmap.$OFFENDIP
+        cat /tmp/nmap.$OFFENDIP | mail -s "nmap Scan Results of Intruder: $OFFENDIP | $OFFENDMAC" $email
+        rm -f /tmp/nmap.$OFFENDIP
+}
+
+scan(){
+    . /etc/netsecure.conf
+
+    export NMAPMAC="`nmap --max-scan-delay 0.75s --max-hostgroup 50 -sP $localnet | grep -io '[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}' | tr '\n' ' '`"
+    if [[ -e $DHCPMAC ]]; then
+        export MAC="$static_mac `grep -io '[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}' < $DHCPMAC  | sort | uniq| tr '\n' ' '`"
+    else
+        export MAC="$static_mac"
+        "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Warning!!! No dhcpd configuration file detected" >> $log
+    fi
+    for i in $NMAPMAC; do
+        match=`echo $MAC | grep -i $i`
+
+        if [[ $match == "" ]]; then
+            export OFFENDMAC=$i
+            export OFFENDIP=`nmap -sP $localnet | grep -i -B 2 $i | grep -i -E -o "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"`
+            exclusion_net=`echo $OFFENDIP | awk -F. '{print $4}'`
+            processed=`echo $TRKOFFENDMAC | grep $OFFENDMAC | grep -io '[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}'`
+
+            if [[ $processed == "" ]]; then
+                if [[ $exclusion_net -lt 240 ]] && [[ $seclevel -eq 0 ]] || [[ $seclevel -eq 1 ]]; then
+                    echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Intrusion Detected - Offending MAC $OFFENDMAC with IP $OFFENDIP" >> $log
+
+                    if [[ $mail_nmap -eq 1 ]]; then
+                        mailnmap
+                    fi
+                    fw_add
+                    shorewall
+                    hostapd_drop
+                    export TRKOFFENDMAC="$OFFENDMAC $TRKOFFENDMAC"
+
+                    unset OFFENDMAC
+                    unset OFFENDIP
+                fi
+            fi
+        fi
+    done
+    if [[ "$daemon" == "1" ]]; then
+        sleep $timeout
+        if [[ $checkpoint -lt 240 ]]; then
+            checkpoint=`expr $checkpoint + 1`
+        else
+            checkpoint=0
+            echo "`date '+%b%e %H:%M:%S'` $HOSTNAME$suffix $name:[$$] Check Point" >> $log
+        fi
+        daemon="1"
+        scan
+    fi
+    unset OFFENDMAC
+    unset OFFENDIP
+}
+
+case $1 in
+    --daemon|-d)
+        daemon="1" && scan
+    ;;
+    --remove|-r)
+        question
+    ;;
+    --scan|-s)
+        daemon="0" && scan
+    ;;
+    *)
+        echo "$name { options [ -d | --daemon | -r | --remove | -s | --scan ]"
+        echo ""
+        echo "-d --daemon    Run as a daemon"
+        echo "-r --remove    Remove the offending MAC address from iptables"
+        echo "-s --scan      Run a one time scan of the local network to identify any unknown/offending devices"
+    ;;
+esac

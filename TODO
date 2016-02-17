@@ -1,4 +1,4 @@
-#####################################################################################
+######################################################################################
 #      This file is part of netsecure - https://github.com/islipfd19/netsecure.git
 #      Copyright (C) 2016 James Millar (islipfd19@gmail.com)
 #
@@ -18,8 +18,17 @@
 #  http://www.gnu.org/copyleft/gpl.html
 ######################################################################################
 
-A Linux daemon to monitor the existence of new/foreign network objects that
-have connected to the local network
+This is the to do file. A list of objectives the writer of the script want to implement
+1. RPM - 
+     A. Create RPM version
 
-In order for this daemon to work properly, nmap and sendmail (or a similar mail
-program) must be installed and setup correctly.
+2. Script Security - 
+     A. Ensure only root and/or the netsecure user can execute the daemon
+
+3. Expand to VPN networks
+     A. Create a method to detect new/foreign network objects on vpn networks
+
+4. Logger
+     A. Make use of logger instead of using written logging entries
+
+5. ...

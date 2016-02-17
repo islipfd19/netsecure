@@ -1,4 +1,4 @@
-#####################################################################################
+################################################################################
 #      This file is part of netsecure - https://github.com/islipfd19/netsecure.git
 #      Copyright (C) 2016 James Millar (islipfd19@gmail.com)
 #
@@ -16,10 +16,15 @@
 #  along with netsecure; see the file COPYING.  If not, write to
 #  the Free Software Foundation, 51 Franklin Street, Suite 500, Boston, MA 02110, USA.
 #  http://www.gnu.org/copyleft/gpl.html
-######################################################################################
+################################################################################
 
-A Linux daemon to monitor the existence of new/foreign network objects that
-have connected to the local network
+#!/bin/bash
 
-In order for this daemon to work properly, nmap and sendmail (or a similar mail
-program) must be installed and setup correctly.
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+echo "This is the install script. It needs to be finished!"
+
+exit 0

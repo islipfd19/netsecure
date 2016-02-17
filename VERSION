@@ -18,8 +18,7 @@
 #  http://www.gnu.org/copyleft/gpl.html
 ######################################################################################
 
-A Linux daemon to monitor the existence of new/foreign network objects that
-have connected to the local network
+VERSION
 
-In order for this daemon to work properly, nmap and sendmail (or a similar mail
-program) must be installed and setup correctly.
+1.0.0 - Initial public release, tried and true and tested on for 6+ months on personal
+        network.
