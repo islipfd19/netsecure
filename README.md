@@ -19,7 +19,10 @@
 ######################################################################################
 
 A Linux daemon to monitor the existence of new/foreign network objects that
-have connected to the local network
+have connected to the local network. If one is detected, it is added to the local
+firewall (or another firewall or shorewall firewall running on another *nix
+server/workstation. In order for that to work properly, the user in the configuration
+file must have authorized ssh keys without a password setup properly.
 
 In order for this daemon to work properly, nmap and sendmail (or a similar mail
 program) must be installed and setup correctly.
